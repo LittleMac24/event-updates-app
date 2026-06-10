@@ -1,0 +1,121 @@
+table,column,type,pk,nullable,unique,fk_table,fk_column,note
+users,id,uuid,yes,no,no,,,
+users,name,text,no,no,no,,,
+users,email,citext,no,yes,yes,,,nullable until guest claims account
+users,phone,text,no,yes,yes,,,
+users,avatar_bucket,text,no,yes,no,,,
+users,avatar_path,text,no,yes,no,,,
+users,status,user_status,no,no,no,,,enum: active|guest|deleted
+users,created_at,timestamptz,no,no,no,,,
+users,updated_at,timestamptz,no,no,no,,,
+events,id,uuid,yes,no,no,,,
+events,name,text,no,no,no,,,
+events,description,text,no,yes,no,,,
+events,event_type,event_type,no,no,no,,,enum: birth|wedding|hospital|trip|other
+events,status,event_status,no,no,no,,,enum: draft|active|ended|archived
+events,visibility,event_visibility,no,no,no,,,enum: private|link|public
+events,starts_at,timestamptz,no,no,no,,,
+events,ends_at,timestamptz,no,yes,no,,,triggers story generation when set
+events,timezone,text,no,no,no,,,IANA tz like America/Los_Angeles
+events,location_name,text,no,yes,no,,,
+events,location_lat,numeric,no,yes,no,,,
+events,location_lng,numeric,no,yes,no,,,
+events,cover_media_id,uuid,no,yes,no,media,id,
+events,created_by_user_id,uuid,no,no,no,users,id,
+events,update_count,int,no,no,no,,,maintained by trigger; default 0
+events,reaction_count,int,no,no,no,,,maintained by trigger; default 0
+events,comment_count,int,no,no,no,,,maintained by trigger; default 0
+events,member_count,int,no,no,no,,,maintained by trigger; default 0
+events,created_at,timestamptz,no,no,no,,,
+events,updated_at,timestamptz,no,no,no,,,
+events,deleted_at,timestamptz,no,yes,no,,,
+event_members,id,uuid,yes,no,no,,,
+event_members,event_id,uuid,no,no,no,events,id,
+event_members,user_id,uuid,no,no,no,users,id,unique with event_id
+event_members,role,member_role,no,no,no,,,enum: owner|contributor|viewer
+event_members,status,member_status,no,no,no,,,enum: invited|active|removed
+event_members,invited_by_user_id,uuid,no,yes,no,users,id,
+event_members,invite_token,text,no,yes,yes,,,only set while status=invited
+event_members,invite_expires_at,timestamptz,no,yes,no,,,
+event_members,joined_at,timestamptz,no,yes,no,,,
+event_members,last_seen_update_id,uuid,no,yes,no,updates,id,unread tracking
+event_members,last_seen_at,timestamptz,no,yes,no,,,
+event_members,created_at,timestamptz,no,no,no,,,
+event_members,updated_at,timestamptz,no,no,no,,,
+updates,id,uuid,yes,no,no,,,
+updates,event_id,uuid,no,no,no,events,id,
+updates,author_user_id,uuid,no,no,no,users,id,
+updates,body_text,text,no,yes,no,,,nullable for media-only updates
+updates,posted_at,timestamptz,no,no,no,,,allows backfill; differs from created_at
+updates,pinned,bool,no,no,no,,,default false
+updates,reaction_count,int,no,no,no,,,maintained by trigger; default 0
+updates,comment_count,int,no,no,no,,,maintained by trigger; default 0
+updates,media_count,int,no,no,no,,,maintained by trigger; default 0
+updates,created_at,timestamptz,no,no,no,,,
+updates,updated_at,timestamptz,no,no,no,,,
+updates,deleted_at,timestamptz,no,yes,no,,,
+comments,id,uuid,yes,no,no,,,
+comments,update_id,uuid,no,no,no,updates,id,
+comments,parent_comment_id,uuid,no,yes,no,comments,id,threading
+comments,author_user_id,uuid,no,no,no,users,id,
+comments,body_text,text,no,yes,no,,,
+comments,reaction_count,int,no,no,no,,,maintained by trigger; default 0
+comments,created_at,timestamptz,no,no,no,,,
+comments,updated_at,timestamptz,no,no,no,,,
+comments,deleted_at,timestamptz,no,yes,no,,,
+media,id,uuid,yes,no,no,,,
+media,event_id,uuid,no,no,no,events,id,denormalized for RLS perf
+media,update_id,uuid,no,yes,no,updates,id,exactly one of update_id/comment_id set
+media,comment_id,uuid,no,yes,no,comments,id,exactly one of update_id/comment_id set
+media,uploader_user_id,uuid,no,no,no,users,id,
+media,storage_bucket,text,no,no,no,,,
+media,storage_path,text,no,no,no,,,
+media,thumbnail_path,text,no,yes,no,,,
+media,mime_type,text,no,no,no,,,
+media,file_size_bytes,bigint,no,no,no,,,
+media,width,int,no,yes,no,,,
+media,height,int,no,yes,no,,,
+media,duration_seconds,int,no,yes,no,,,
+media,created_at,timestamptz,no,no,no,,,
+media,deleted_at,timestamptz,no,yes,no,,,
+reactions,id,uuid,yes,no,no,,,
+reactions,event_id,uuid,no,no,no,events,id,denormalized for RLS perf
+reactions,target_type,reaction_target,no,no,no,,,enum: update|comment
+reactions,target_id,uuid,no,no,no,,,polymorphic FK to updates.id or comments.id
+reactions,user_id,uuid,no,no,no,users,id,
+reactions,reaction_type,text,no,no,no,,,emoji shortcode (heart sob party pray etc)
+reactions,created_at,timestamptz,no,no,no,,,unique on target_type+target_id+user_id+reaction_type
+prompts,id,uuid,yes,no,no,,,
+prompts,event_id,uuid,no,no,no,events,id,
+prompts,created_by_user_id,uuid,no,no,no,users,id,
+prompts,kind,prompt_kind,no,no,no,,,enum: prediction|poll
+prompts,question,text,no,no,no,,,
+prompts,value_type,prompt_value_type,no,no,no,,,enum: date|datetime|number|choice
+prompts,choices,jsonb,no,yes,no,,,only for value_type=choice
+prompts,unit,text,no,yes,no,,,e.g. lbs minutes
+prompts,closes_at,timestamptz,no,yes,no,,,
+prompts,resolved_at,timestamptz,no,yes,no,,,prediction only
+prompts,actual_value,jsonb,no,yes,no,,,prediction only
+prompts,response_count,int,no,no,no,,,maintained by trigger; default 0
+prompts,created_at,timestamptz,no,no,no,,,
+responses,id,uuid,yes,no,no,,,
+responses,prompt_id,uuid,no,no,no,prompts,id,unique with user_id
+responses,user_id,uuid,no,no,no,users,id,
+responses,value,jsonb,no,no,no,,,shape depends on prompts.value_type
+responses,created_at,timestamptz,no,no,no,,,
+responses,updated_at,timestamptz,no,no,no,,,
+notifications,id,uuid,yes,no,no,,,
+notifications,recipient_user_id,uuid,no,no,no,users,id,
+notifications,event_id,uuid,no,no,no,events,id,
+notifications,actor_user_id,uuid,no,yes,no,users,id,
+notifications,type,notification_type,no,no,no,,,enum: reaction|comment|media|prediction|poll|invite|milestone
+notifications,payload,jsonb,no,no,no,,,deep-link payload
+notifications,read_at,timestamptz,no,yes,no,,,
+notifications,created_at,timestamptz,no,no,no,,,
+event_exports,id,uuid,yes,no,no,,,
+event_exports,event_id,uuid,no,no,no,events,id,
+event_exports,requested_by_user_id,uuid,no,no,no,users,id,
+event_exports,status,text,no,no,no,,,job queue status
+event_exports,file_url,text,no,yes,no,,,
+event_exports,created_at,timestamptz,no,no,no,,,
+event_exports,completed_at,timestamptz,no,yes,no,,,
