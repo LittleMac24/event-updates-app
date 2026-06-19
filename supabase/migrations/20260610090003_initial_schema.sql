@@ -26,8 +26,9 @@ CREATE TYPE event_visibility   AS ENUM ('private', 'link', 'public');
 CREATE TYPE member_role        AS ENUM ('owner', 'contributor', 'viewer');
 CREATE TYPE member_status      AS ENUM ('invited', 'active', 'removed');
 CREATE TYPE update_kind        AS ENUM ('text', 'photo', 'video', 'voice', 'poll', 'prediction');
-CREATE TYPE prompt_value_type  AS ENUM ('date', 'datetime', 'number', 'choice');
-CREATE TYPE reaction_target    AS ENUM ('update', 'comment');
+CREATE TYPE response_value     AS ENUM ('date', 'datetime', 'float', 'value_set');
+create type response_type      as enum ('free_response', 'multiple_choice');
+CREATE TYPE reaction_for    AS ENUM ('update', 'comment');
 CREATE TYPE notification_type  AS ENUM ('reaction', 'comment', 'update', 'prediction', 'poll', 'invite', 'milestone');
 
 -- ------------------------------------------------------------
@@ -88,31 +89,34 @@ CREATE TABLE updates (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   event_id          uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE, -- deletes all updates dependent of the event
   author_user_id    uuid NOT NULL REFERENCES users(id)  ON DELETE RESTRICT, -- delete user should not delete updates, but we can consider setting to NULL in the future if needed
-  kind              update_kind NOT NULL,
+  update_type       update_kind NOT NULL,
 
   -- Shared
   body_text         text,
+  title             text,
   posted_at         timestamptz NOT NULL DEFAULT now(),
   pinned            boolean     NOT NULL DEFAULT false,
 
+
   -- Media fields (photo, video, voice)
-  storage_bucket    text,
-  storage_path      text,
+  storage_bucket    text, -- where the media is stored (e.g. "event-media"), its not the path 
+  storage_path      text, -- path for the media (e.g. "event-media/1234abcd"), can be used with bucket to get the full URL, and can be null for text-only updates
   thumbnail_path    text,
-  mime_type         text,
+  mime_type         text, --type (image, video, audio), and subtype (jpeg, mp4, etc.) can be parsed from this i.e "image/jpeg"
   file_size_bytes   bigint,
-  width             int,
-  height            int,
-  duration_seconds  int,
+  frame_rate        int, -- Frames per second
+  width             int, -- for photos and videos, width of the media in pixels
+  height            int, -- for photos and videos, height of the media in pixels
+  duration_seconds  int, -- for videos and voice, duration of the media in seconds
 
   -- Prompt fields (poll, prediction)
-  value_type        prompt_value_type,
-  choices           jsonb,
-  unit              text,
-  closes_at         timestamptz,
-  resolved_at       timestamptz,
-  actual_value      jsonb,
-  response_count    int NOT NULL DEFAULT 0,
+  response_type       response_type, -- free-response vs multiple-choice (for polls and predictions)
+  response_value      response_value,
+  value_set           jsonb,
+  closes_at         timestamptz, -- when the poll or prediction closes for responses
+  prediction_resolved_at       timestamptz, -- when the prediction was resolved (can be different from closes_at because predictions can be resolved early or late)
+  prediction_answer      jsonb, -- for predictions, the correct answer (can be any JSON value depending on the type of prediction)
+  response_count    int NOT NULL DEFAULT 0, -- # of repsonses from event members for polls and predictions, this is a counter that is updated by triggers on the responses table
 
   -- Engagement counters
   reaction_count    int NOT NULL DEFAULT 0,
@@ -122,14 +126,14 @@ CREATE TABLE updates (
   updated_at        timestamptz NOT NULL DEFAULT now(),
   deleted_at        timestamptz,
 
-  CONSTRAINT updates_kind_fields_valid CHECK (
-    CASE kind
-      WHEN 'text'       THEN body_text IS NOT NULL AND storage_path IS NULL AND value_type IS NULL
-      WHEN 'photo'      THEN storage_path IS NOT NULL AND value_type IS NULL
-      WHEN 'video'      THEN storage_path IS NOT NULL AND value_type IS NULL
-      WHEN 'voice'      THEN storage_path IS NOT NULL AND value_type IS NULL
-      WHEN 'poll'       THEN body_text IS NOT NULL AND value_type IS NOT NULL AND storage_path IS NULL
-      WHEN 'prediction' THEN body_text IS NOT NULL AND value_type IS NOT NULL AND storage_path IS NULL
+  CONSTRAINT updates_type_fields_valid CHECK (
+    CASE update_type
+      WHEN 'text'       THEN body_text IS NOT NULL AND storage_path IS NULL AND response_value IS NULL
+      WHEN 'photo'      THEN storage_path IS NOT NULL and storage_bucket IS NOT NULL AND response_value IS NULL
+      WHEN 'video'      THEN storage_path IS NOT NULL and storage_bucket IS NOT NULL AND response_value IS NULL
+      WHEN 'voice'      THEN storage_path IS NOT NULL and storage_bucket IS NOT NULL AND response_value IS NULL
+      WHEN 'poll'       THEN title IS NOT NULL AND response_type IS NOT NULL AND response_value IS NOT NULL AND storage_path IS NULL
+      WHEN 'prediction' THEN title IS NOT NULL AND response_type IS NOT NULL AND response_value IS NOT NULL AND storage_path IS NULL
     END
   )
 );
@@ -149,9 +153,11 @@ CREATE TABLE event_members (
   invite_expires_at     timestamptz,
   joined_at             timestamptz,
   last_seen_update_id   uuid REFERENCES updates(id)          ON DELETE SET NULL,
-  last_seen_at          timestamptz,
+  last_seen_at          timestamptz, -- when the user last viewed the event timeline, used for tracking unread updates
   created_at            timestamptz NOT NULL DEFAULT now(),
-  updated_at            timestamptz NOT NULL DEFAULT now()
+  updated_at            timestamptz NOT NULL DEFAULT now(),
+  notification_preference jsonb -- user preferences for receiving notifications for this event (e.g. { "reactions": true, "comments": false }
+  
 );
 
 -- ------------------------------------------------------------
@@ -161,7 +167,7 @@ CREATE TABLE event_members (
 CREATE TABLE comments (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   update_id           uuid NOT NULL REFERENCES updates(id)  ON DELETE CASCADE,
-  parent_comment_id   uuid REFERENCES comments(id)          ON DELETE SET NULL,
+  parent_comment_id   uuid REFERENCES comments(id)          ON DELETE SET NULL, -- for threading, if null then it's a top-level comment
   author_user_id      uuid NOT NULL REFERENCES users(id)    ON DELETE RESTRICT,
   body_text           text NOT NULL,
   reaction_count      int  NOT NULL DEFAULT 0,
@@ -180,7 +186,7 @@ CREATE TABLE comments (
 CREATE TABLE reactions (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   event_id        uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-  target_type     reaction_target NOT NULL,
+  reaction_for    reaction_for NOT NULL, --
   target_id       uuid NOT NULL,
   user_id         uuid NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
   reaction_type   text NOT NULL,
@@ -191,7 +197,7 @@ CREATE TABLE reactions (
 -- Responses (poll / prediction votes)
 -- ------------------------------------------------------------
 
-CREATE TABLE responses (
+CREATE TABLE prompt_responses (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   update_id   uuid NOT NULL REFERENCES updates(id) ON DELETE CASCADE,
   user_id     uuid NOT NULL REFERENCES users(id)   ON DELETE CASCADE,
@@ -201,12 +207,12 @@ CREATE TABLE responses (
 );
 
 -- ------------------------------------------------------------
--- Notifications
+-- Notifications: It shows when a user receives a notification and when they read it. etc
 -- ------------------------------------------------------------
 
 CREATE TABLE notifications (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  recipient_user_id   uuid NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
+  recipient_user_id   uuid NOT NULL REFERENCES users(id)  ON DELETE CASCADE, 
   event_id            uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   actor_user_id       uuid REFERENCES users(id)           ON DELETE SET NULL,
   type                notification_type NOT NULL,
@@ -235,17 +241,17 @@ CREATE TABLE event_exports (
 
 -- event_members: enforce one row per (event, user) + support lookups
 CREATE UNIQUE INDEX idx_event_members_unique
-  ON event_members(event_id, user_id);
+  ON event_members(event_id, user_id); -- one row per (event,user); also THE RLS membership-check index + "members of an event"
 CREATE INDEX idx_event_members_user_status
-  ON event_members(user_id, status);
+  ON event_members(user_id, status); -- user-centric: "my events" / "my active events" (home screen)
 CREATE INDEX idx_event_members_event_status
-  ON event_members(event_id, status);
+  ON event_members(event_id, status); -- event-centric: "active members of this event" (member lists, notification fan-out)
 
 -- updates: partial indexes for active rows (most reads filter deleted_at IS NULL)
 CREATE INDEX idx_updates_event_posted_alive
   ON updates(event_id, posted_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX idx_updates_event_kind_alive
-  ON updates(event_id, kind) WHERE deleted_at IS NULL;
+CREATE INDEX idx_updates_event_update_type_alive
+  ON updates(event_id, update_type) WHERE deleted_at IS NULL;
 
 -- comments: partial index for active rows
 CREATE INDEX idx_comments_update_created_alive
@@ -253,13 +259,13 @@ CREATE INDEX idx_comments_update_created_alive
 
 -- reactions: prevent duplicate user+target+type + support target lookups
 CREATE UNIQUE INDEX idx_reactions_unique
-  ON reactions(target_type, target_id, user_id, reaction_type);
+  ON reactions(reaction_for, target_id, user_id, reaction_type);
 CREATE INDEX idx_reactions_target
-  ON reactions(target_type, target_id);
+  ON reactions(reaction_for, target_id);
 
 -- responses: one response per user per prompt
-CREATE UNIQUE INDEX idx_responses_unique
-  ON responses(update_id, user_id);
+CREATE UNIQUE INDEX idx_prompt_responses_unique
+  ON prompt_responses(update_id, user_id);
 
 -- notifications: unread-first ordering for the inbox query
 CREATE INDEX idx_notifications_inbox
