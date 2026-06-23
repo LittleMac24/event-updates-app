@@ -1,3 +1,29 @@
+# dependencies
 node_modules/
+
+# secrets
 .env
+.env.local
+
+# supabase
 .supabase/
+
+# expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# native
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# macOS
+.DS_Store
+
+# metro
+.metro-health-check*
